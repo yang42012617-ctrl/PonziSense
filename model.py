@@ -32,10 +32,10 @@ class Model(nn.Module):
         self.tokenizer=tokenizer
         self.classifier=RobertaClassificationHead(config)
         self.args=args
-        # 初始化对比学习所需的聚类中心和温度参数
-        self.cluster_centers = nn.Parameter(torch.randn(10, config.hidden_size))  # 假设有10个聚类中心
+        
+        self.cluster_centers = nn.Parameter(torch.randn(10, config.hidden_size))  
         self.temperature = nn.Parameter(torch.tensor(0.5))
-        # 初始化解释器参数
+        
         self.edge_perturbator = nn.Linear(config.hidden_size, 1)
         self.interpreter_head = nn.Linear(config.hidden_size, config.hidden_size)
     
@@ -68,55 +68,55 @@ class Model(nn.Module):
             return prob
     
     def forward_interpreter(self, inputs_ids, position_idx, attn_mask, original_logits):
-        # 提取原始特征
+        
         features = self.extract_features(inputs_ids, position_idx, attn_mask)
         
-        # 计算边重要性分数
+        
         edge_scores = torch.sigmoid(self.edge_perturbator(features))
         
-        # 扰动图边 (保留50%的边)
+        
         perturbed_attn_mask = attn_mask * (torch.rand_like(edge_scores) < edge_scores).float()
         
-        # 获取扰动后的特征和预测
+        
         perturbed_features = self.extract_features(inputs_ids, position_idx, perturbed_attn_mask)
         perturbed_logits = self.classifier(perturbed_features)
         
-        # 计算扰动损失 (MSE between original and perturbed logits)
+        
         loss_perturb = F.mse_loss(original_logits, perturbed_logits)
         
-        # 计算反向预测损失 (预测边重要性分数)
+        
         reversed_features = self.interpreter_head(perturbed_features)
         pred_edge_scores = torch.sigmoid(torch.matmul(features, reversed_features.transpose(1,2)))
         loss_reverse = F.binary_cross_entropy(pred_edge_scores, edge_scores)
         
-        # 综合解释器损失
+        
         return loss_perturb + 0.1 * loss_reverse
     
     def forward_contrastive(self, inputs_ids_s,position_idx_s,attn_mask_s,
                             inputs_ids_w,position_idx_w,attn_mask_w,
                             inputs_ids_m,position_idx_m,attn_mask_m):
-        # 提取三个视图的特征
+        
         features_s = self.extract_features(inputs_ids_s,position_idx_s,attn_mask_s)
         features_w = self.extract_features(inputs_ids_w,position_idx_w,attn_mask_w)
         features_m = self.extract_features(inputs_ids_m,position_idx_m,attn_mask_m)
         
-        # 映射到聚类中心空间
+        
         delta_s = torch.matmul(features_s[:,0,:], self.cluster_centers.t())
         delta_w = torch.matmul(features_w[:,0,:], self.cluster_centers.t())
         delta_m = torch.matmul(features_m[:,0,:], self.cluster_centers.t())
         
-        # 计算视图间相似度
+        
         sim_s_w = F.cosine_similarity(delta_s, delta_w)
         sim_s_m = F.cosine_similarity(delta_s, delta_m)
         sim_w_m = F.cosine_similarity(delta_w, delta_m)
         
-        # 拼接相似度并应用温度缩放
+        
         similarities = torch.stack([sim_s_w, sim_s_m, sim_w_m], dim=1) / self.temperature
         
-        # 标签：每个样本应与自身匹配
+        
         labels = torch.zeros(similarities.size(0), dtype=torch.long, device=inputs_ids_s.device)
         
-        # 计算对比损失
+        
         loss = F.cross_entropy(similarities, labels)
         return loss
       
